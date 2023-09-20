@@ -571,6 +571,7 @@ subject_to_jsval (PolkitBackendJsAuthority  *authority,
                   GError                   **error)
 {
   gboolean ret = FALSE;
+  gboolean no_new_privs = FALSE;
   JS::CompileOptions options(authority->priv->cx);
   const char *src;
   JS::RootedObject obj(authority->priv->cx);
@@ -580,9 +581,11 @@ subject_to_jsval (PolkitBackendJsAuthority  *authority,
   PolkitSubject *process = NULL;
   gchar *user_name = NULL;
   GPtrArray *groups = NULL;
+  GArray *gids_from_dbus = NULL;
   struct passwd *passwd;
   char *seat_str = NULL;
   char *session_str = NULL;
+  char *system_unit = NULL;
   JS::RootedObject global(authority->priv->cx, authority->priv->js_global->get ());
 
   src = "new Subject();";
@@ -635,45 +638,75 @@ subject_to_jsval (PolkitBackendJsAuthority  *authority,
   uid = polkit_unix_user_get_uid (POLKIT_UNIX_USER (user_for_subject));
 
   groups = g_ptr_array_new_with_free_func (g_free);
+  gids_from_dbus = polkit_unix_process_get_gids (POLKIT_UNIX_PROCESS (process));
 
-  passwd = getpwuid (uid);
-  if (passwd == NULL)
+  /* D-Bus will give us supplementary groups too, so prefer that to looking up
+   * the group from the uid. */
+  if (gids_from_dbus && gids_from_dbus->len > 0)
     {
-      user_name = g_strdup_printf ("%d", (gint) uid);
-      g_warning ("Error looking up info for uid %d: %m", (gint) uid);
+      gint n;
+      for (n = 0; n < gids_from_dbus->len; n++)
+        {
+          struct group *group;
+          group = getgrgid (g_array_index (gids_from_dbus, gid_t, n));
+          if (group == NULL)
+            {
+              g_ptr_array_add (groups, g_strdup_printf ("%d", (gint) g_array_index (gids_from_dbus, gid_t, n)));
+            }
+          else
+            {
+              g_ptr_array_add (groups, g_strdup (group->gr_name));
+            }
+        }
     }
   else
     {
-      gid_t gids[512];
-      int num_gids = 512;
-
-      user_name = g_strdup (passwd->pw_name);
-
-      if (getgrouplist (passwd->pw_name,
-                        passwd->pw_gid,
-                        gids,
-                        &num_gids) < 0)
+      passwd = getpwuid (uid);
+      if (passwd == NULL)
         {
-          g_warning ("Error looking up groups for uid %d: %m", (gint) uid);
+          user_name = g_strdup_printf ("%d", (gint) uid);
+          g_warning ("Error looking up info for uid %d: %m", (gint) uid);
         }
       else
         {
-          gint n;
-          for (n = 0; n < num_gids; n++)
+          gid_t gids[512];
+          int num_gids = 512;
+
+          user_name = g_strdup (passwd->pw_name);
+
+          if (getgrouplist (passwd->pw_name,
+                            passwd->pw_gid,
+                            gids,
+                            &num_gids) < 0)
             {
-              struct group *group;
-              group = getgrgid (gids[n]);
-              if (group == NULL)
+              g_warning ("Error looking up groups for uid %d: %m", (gint) uid);
+            }
+          else
+            {
+              gint n;
+              for (n = 0; n < num_gids; n++)
                 {
-                  g_ptr_array_add (groups, g_strdup_printf ("%d", (gint) gids[n]));
-                }
-              else
-                {
-                  g_ptr_array_add (groups, g_strdup (group->gr_name));
+                  struct group *group;
+                  group = getgrgid (gids[n]);
+                  if (group == NULL)
+                    {
+                      g_ptr_array_add (groups, g_strdup_printf ("%d", (gint) gids[n]));
+                    }
+                  else
+                    {
+                      g_ptr_array_add (groups, g_strdup (group->gr_name));
+                    }
                 }
             }
         }
     }
+
+  /* Query the unit, will work only if we got the pidfd from dbus-daemon/broker.
+   * Best-effort operation, will log on failure, but we don't bail here. But
+   * only do so if the pidfd was marked as safe, i.e.: we got it from D-Bus so
+   * it can be trusted end-to-end, with no reuse attack window.  */
+  if (polkit_unix_process_get_pidfd_is_safe (POLKIT_UNIX_PROCESS (process)))
+    polkit_backend_common_pidfd_to_systemd_unit (pidfd, &system_unit, &no_new_privs);
 
   /* In case we are using PIDFDs, check that the PID still matches to avoid race
    * conditions and PID recycle attacks.
@@ -690,6 +723,10 @@ subject_to_jsval (PolkitBackendJsAuthority  *authority,
   set_property_strv (authority, obj, "groups", groups);
   set_property_str (authority, obj, "seat", seat_str);
   set_property_str (authority, obj, "session", session_str);
+  set_property_str (authority, obj, "system_unit", system_unit);
+  /* If we have a unit, also record if it has the NoNewPrivileges setting enabled */
+  if (system_unit)
+    set_property_bool (authority, obj, "no_new_privileges", no_new_privs);
   set_property_bool (authority, obj, "local", subject_is_local);
   set_property_bool (authority, obj, "active", subject_is_active);
 
@@ -700,9 +737,12 @@ subject_to_jsval (PolkitBackendJsAuthority  *authority,
     g_object_unref (process);
   free (session_str);
   free (seat_str);
+  free (system_unit);
   g_free (user_name);
   if (groups != NULL)
     g_ptr_array_unref (groups);
+  if (gids_from_dbus != NULL)
+    g_array_unref (gids_from_dbus);
 
   return ret;
 }

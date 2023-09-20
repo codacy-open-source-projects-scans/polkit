@@ -56,10 +56,14 @@ PolkitSubject  *polkit_unix_process_new_for_owner  (gint               pid,
                                                     guint64            start_time,
                                                     gint               uid);
 PolkitSubject  *polkit_unix_process_new_pidfd      (gint               pidfd,
-                                                    gint               uid);
+                                                    gint               uid,
+                                                    GArray            *gids);
+GArray         *polkit_unix_process_get_gids       (PolkitUnixProcess *process);
 gint            polkit_unix_process_get_pid        (PolkitUnixProcess *process);
 guint64         polkit_unix_process_get_start_time (PolkitUnixProcess *process);
 gint            polkit_unix_process_get_uid        (PolkitUnixProcess *process);
+void            polkit_unix_process_set_gids       (PolkitUnixProcess *process,
+                                                    GArray            *gids);
 void            polkit_unix_process_set_pid        (PolkitUnixProcess *process,
                                                     gint               pid);
 void            polkit_unix_process_set_uid        (PolkitUnixProcess *process,
@@ -72,6 +76,7 @@ gint            polkit_unix_process_get_owner      (PolkitUnixProcess  *process,
 gint            polkit_unix_process_get_pidfd      (PolkitUnixProcess  *process);
 void            polkit_unix_process_set_pidfd      (PolkitUnixProcess  *process,
                                                     gint                pidfd);
+gboolean        polkit_unix_process_get_pidfd_is_safe (PolkitUnixProcess *process);
 
 G_END_DECLS
 
