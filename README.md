@@ -1,7 +1,9 @@
-# polkit - master branch
+NOTICE
+======
 
-This repository contains the frozen state of the repository.
-Its history is cleared. It is used only for static code
-analysis with Codacy.
+## The polkit project has been MIGRATED to a new repository.  
+The new address of the codebase for the polkit project is  
+https://github.com/polkit-org/polkit
 
-Commit Time: 1729828557
+This instance of polkit's codebase has been archived.  
+All issues and merge-requests have been migrated as well.  
